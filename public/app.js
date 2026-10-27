@@ -1,15 +1,40 @@
 // app.js
 const API = '/api';
+const CURRENCY = '$'; // change to '₹' if you want rupees
 let token = localStorage.getItem('ft_token');
 let username = localStorage.getItem('ft_username');
 
 let categoryChart = null;
 let monthlyChart = null;
 
+const CHART_COLORS = ['#2563eb', '#0ea5e9', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6', '#ec4899', '#64748b'];
+
 // ---------- Element refs ----------
 const authScreen = document.getElementById('authScreen');
 const dashboard = document.getElementById('dashboard');
 const authError = document.getElementById('authError');
+
+// ---------- Helpers ----------
+function fmtMoney(n) {
+  return CURRENCY + Number(n || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+// Today's date in the user's LOCAL timezone (valueAsDate uses UTC and can show yesterday)
+function todayLocal() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
 
 // ---------- Tab switching ----------
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -66,6 +91,8 @@ document.getElementById('logoutBtn').addEventListener('click', () => {
   token = null;
   localStorage.removeItem('ft_token');
   localStorage.removeItem('ft_username');
+  if (categoryChart) { categoryChart.destroy(); categoryChart = null; }
+  if (monthlyChart) { monthlyChart.destroy(); monthlyChart = null; }
   dashboard.classList.add('hidden');
   authScreen.classList.remove('hidden');
 });
@@ -95,12 +122,24 @@ function showDashboard() {
   authScreen.classList.add('hidden');
   dashboard.classList.remove('hidden');
   document.getElementById('welcomeUser').textContent = 'Hi, ' + username;
-  document.getElementById('expDate').valueAsDate = new Date();
+  document.getElementById('expDate').value = todayLocal();
   loadAll();
 }
 
 async function loadAll() {
-  await Promise.all([loadExpenses(), loadBudgets(), loadCategoryChart(), loadMonthlyChart(), loadAlerts()]);
+  try {
+    // Fetch the category breakdown once and share it (budgets + chart both need it)
+    const [{ breakdown }] = await Promise.all([
+      api('/reports/category'),
+      loadExpenses(),
+      loadMonthlyChart(),
+      loadAlerts()
+    ]);
+    await loadBudgets(breakdown);
+    renderCategoryChart(breakdown);
+  } catch (err) {
+    console.error('Failed to load dashboard:', err);
+  }
 }
 
 // ---------- Expenses ----------
@@ -115,7 +154,7 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
   try {
     await api('/expenses', { method: 'POST', body: JSON.stringify(body) });
     e.target.reset();
-    document.getElementById('expDate').valueAsDate = new Date();
+    document.getElementById('expDate').value = todayLocal();
     loadAll();
   } catch (err) {
     alert(err.message);
@@ -129,9 +168,9 @@ async function loadExpenses() {
   expenses.forEach(exp => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${exp.date}</td>
+      <td>${escapeHtml(exp.date)}</td>
       <td>${escapeHtml(exp.category)}</td>
-      <td>$${exp.amount.toFixed(2)}</td>
+      <td>${fmtMoney(exp.amount)}</td>
       <td>${escapeHtml(exp.description || '')}</td>
       <td><button class="del-row-btn" data-id="${exp.id}">✕</button></td>
     `;
@@ -140,8 +179,12 @@ async function loadExpenses() {
   tbody.querySelectorAll('.del-row-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this expense?')) return;
-      await api('/expenses/' + btn.dataset.id, { method: 'DELETE' });
-      loadAll();
+      try {
+        await api('/expenses/' + btn.dataset.id, { method: 'DELETE' });
+        loadAll();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }
@@ -162,9 +205,8 @@ document.getElementById('budgetForm').addEventListener('submit', async (e) => {
   }
 });
 
-async function loadBudgets() {
+async function loadBudgets(breakdown) {
   const budgets = await api('/budgets');
-  const { breakdown } = await api('/reports/category');
   const spendMap = {};
   breakdown.forEach(b => { spendMap[b.category] = b.total; });
 
@@ -179,7 +221,7 @@ async function loadBudgets() {
       <div style="flex:1">
         <div style="display:flex;justify-content:space-between">
           <span>${escapeHtml(b.category)}</span>
-          <span>$${spent.toFixed(2)} / $${b.limit.toFixed(2)}</span>
+          <span>${fmtMoney(spent)} / ${fmtMoney(b.limit)}</span>
         </div>
         <div class="progress"><div class="progress-fill ${over ? 'over' : ''}" style="width:${pct}%"></div></div>
       </div>
@@ -189,8 +231,12 @@ async function loadBudgets() {
   });
   list.querySelectorAll('.del-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await api('/budgets/' + btn.dataset.id, { method: 'DELETE' });
-      loadAll();
+      try {
+        await api('/budgets/' + btn.dataset.id, { method: 'DELETE' });
+        loadAll();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }
@@ -204,27 +250,64 @@ async function loadAlerts() {
     return;
   }
   banner.classList.remove('hidden');
-  banner.innerHTML = '<strong>⚠️ Budget Alerts</strong>' + alerts.map(a => {
+  banner.innerHTML = '<strong>⚠️ Budget Alerts</strong><br>' + alerts.map(a => {
     const status = a.pct >= 100 ? 'exceeded' : 'is close to';
-    return `${escapeHtml(a.category)}: $${a.spent.toFixed(2)} of $${a.limit.toFixed(2)} (${a.pct}%) — ${status} the limit`;
+    return `${escapeHtml(a.category)}: ${fmtMoney(a.spent)} of ${fmtMoney(a.limit)} (${a.pct}%) — ${status} the limit`;
   }).join('<br>');
 }
 
 // ---------- Charts ----------
-async function loadCategoryChart() {
-  const { breakdown } = await api('/reports/category');
+// Doughnut where every category stays visible: each slice gets at least
+// MIN_SLICE of the circle, while the legend and tooltip show the REAL amounts.
+function renderCategoryChart(breakdown) {
   const ctx = document.getElementById('categoryChart');
   if (categoryChart) categoryChart.destroy();
+
+  const labels = breakdown.map(b => b.category);
+  const real = breakdown.map(b => b.total);
+  const total = real.reduce((a, b) => a + b, 0);
+
+  const MIN_SLICE = 0.06; // 6% of the circle minimum
+  const minValue = total * MIN_SLICE;
+  const shown = real.map(v => Math.max(v, minValue));
+
+  const pctOf = (v) => (total > 0 ? ((v / total) * 100).toFixed(1) : '0.0');
+
   categoryChart = new Chart(ctx, {
-    type: 'pie',
+    type: 'doughnut',
     data: {
-      labels: breakdown.map(b => b.category),
+      labels,
       datasets: [{
-        data: breakdown.map(b => b.total),
-        backgroundColor: ['#2563eb', '#0ea5e9', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6', '#ec4899', '#64748b']
+        data: shown,
+        backgroundColor: labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
+        borderColor: '#ffffff',
+        borderWidth: 3
       }]
     },
-    options: { responsive: true, maintainAspectRatio: true }
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      cutout: '50%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            generateLabels: (chart) => labels.map((label, i) => ({
+              text: `${label}: ${fmtMoney(real[i])} (${pctOf(real[i])}%)`,
+              fillStyle: CHART_COLORS[i % CHART_COLORS.length],
+              strokeStyle: CHART_COLORS[i % CHART_COLORS.length],
+              hidden: !chart.getDataVisibility(i),
+              index: i
+            }))
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: (c) => ` ${labels[c.dataIndex]}: ${fmtMoney(real[c.dataIndex])} (${pctOf(real[c.dataIndex])}%)`
+          }
+        }
+      }
+    }
   });
 }
 
@@ -241,7 +324,12 @@ async function loadMonthlyChart() {
     options: {
       responsive: true,
       maintainAspectRatio: true,
-      scales: { y: { beginAtZero: true } }
+      scales: { y: { beginAtZero: true } },
+      plugins: {
+        tooltip: {
+          callbacks: { label: (c) => ` Total: ${fmtMoney(c.parsed.y)}` }
+        }
+      }
     }
   });
 }
@@ -251,7 +339,10 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
   const month = document.getElementById('exportMonth').value;
   const url = `${API}/export/csv${month ? '?month=' + month : ''}`;
   fetch(url, { headers: { Authorization: 'Bearer ' + token } })
-    .then(res => res.blob())
+    .then(res => {
+      if (!res.ok) throw new Error('Export failed');
+      return res.blob();
+    })
     .then(blob => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -259,16 +350,10 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
       document.body.appendChild(a);
       a.click();
       a.remove();
+      URL.revokeObjectURL(a.href);
     })
     .catch(() => alert('Export failed'));
 });
-
-// ---------- Utils ----------
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
 
 // ---------- Init ----------
 if (token) {
