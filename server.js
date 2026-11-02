@@ -6,9 +6,9 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const mongoose = require('mongoose');
 
-const JWT_SECRET = '9b2f6c1e0a47d83f5e1c7a9d2b4f8e60c3f5d7f19e2b4c6a8d0f1e3b5a7c9d24';
+const JWT_SECRET = '57e42b05941737c6af23b57d098988c982c9e2a39db843491d846db71df3bd66773337063f0896684ddef42b1e6f0a89117d57daccec804f7998e3fa8dbdcc25';
 const PORT = process.env.PORT || 4000;
-const MONGODB_URI = 'mongodb+srv://shreeshailsangolge05_db_user:shree66666@cluster0.xvhvxls.mongodb.net/';
+const MONGODB_URI = 'mongodb+srv://shreeshailsangolge05_db_user:<DB_PASS>@cluster0.xvhvxls.mongodb.net/';
 
 if (!MONGODB_URI) {
   console.error('Missing MONGODB_URI environment variable. Set it in Vercel → Settings → Environment Variables.');
