@@ -1,4 +1,5 @@
 // server.js
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -6,9 +7,18 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const mongoose = require('mongoose');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
-const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET;
 const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!JWT_SECRET) {
+    throw new Error('Missing JWT_SECRET environment variable');
+}
+
+if (!MONGODB_URI) {
+    throw new Error('Missing MONGODB_URI environment variable');
+}
+
+const PORT = process.env.PORT || 4000;
 
 if (!MONGODB_URI) {
   console.error('Missing MONGODB_URI environment variable. Set it in Vercel → Settings → Environment Variables.');
